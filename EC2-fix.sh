@@ -121,8 +121,12 @@ sed -i 's/^log_group\s*=\s*adm/log_group = root/' /etc/audit/auditd.conf
 
 ##  V-260604 - Ubuntu 22.04 LTS must generate audit records for successful/unsuccessful uses of the apparmor_parser command.
 sh -c 'echo "-a always,exit -F path=/usr/sbin/apparmor_parser -F perm=x -F auid>=1000 -F auid!=-1 -k perm_chng" >> /etc/audit/rules.d/stig.rules'
+## V-260605 - Ubuntu 22.04 LTS must generate audit records for successful/unsuccessful uses of the chacl command.
+sh -c 'echo "-a always,exit -F path=/usr/bin/chacl -F perm=x -F auid>=1000 -F auid!=-1 -k perm_chng" >> /etc/audit/rules.d/stig.rules'
 auditctl -R /etc/audit/rules.d/stig.rules
 systemctl restart auditd.service
+
+## 
 
 ### CAT III
 ---------------------------------------------------------------------------------------------------------------------------------------------------------
