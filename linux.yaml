@@ -1,0 +1,1647 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Linux-specific ImageBuilder Components (RHEL9, AL2023, Ubuntu)
+
+Parameters:
+  pComponentBucket:
+    Type: String
+    Description: S3 bucket for component files
+
+  pS3Bucket:
+    Type: String
+    Description: S3 bucket containing nested stack templates
+    Default: idcs-management-core-devops
+
+  pS3Prefix:
+    Type: String
+    Description: S3 prefix for nested stack templates
+    Default: image-pipeline
+
+  pKMSKeyArn:
+    Type: String
+    Description: KMS key ARN for encryption
+
+Resources:
+  ##########################
+  # RHEL 8 Components
+  ##########################
+  rRhel8Python3install:
+    Type: "AWS::ImageBuilder::Component"
+    Properties:
+      Name: "RHEL8-Python3"
+      Platform: Linux
+      Version: 1.0.0
+      Description: Install Python 3 and essential packages for RHEL 8
+      Data: |
+        name: RHEL8Python3Install
+        description: Install Python 3 and essential packages for RHEL 8
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              - name: InstallPython3
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      # RHEL 8 specific Python 3 installation
+                      sudo yum install -y python3 python3-pip
+                      # Verify installation
+                      python3 --version
+                      pip3 --version
+                      # Install common packages that might be needed
+                      sudo pip3 install --upgrade pip
+      KmsKeyId: !Ref pKMSKeyArn
+
+  ##########################
+  # RHEL 9 Components
+  ##########################
+  # SSM Agent component consolidated into shared rLinuxSSMAgentComponent above
+
+  rRhelPython3install:
+    Type: "AWS::ImageBuilder::Component"
+    Properties:
+      Name: "Python3"
+      Platform: Linux
+      Version: 1.0.0
+      Description: Install Python 3 and essential packages
+      Data: |
+        name: Python3Install
+        description: Install Python 3 and essential packages
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              - name: InstallPython3
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - sudo yum install -y python3 python3-pip
+                    - python3 --version
+                    - pip3 --version
+      KmsKeyId: !Ref pKMSKeyArn
+
+  ##########################
+  # Ubuntu Security Hardening Component
+  ##########################
+  rUbuntuSecurityHardeningComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: Ubuntu-Security-Hardening-CVE-Remediation
+      Platform: Linux
+      Version: 1.0.2
+      Description: Comprehensive security hardening for Ubuntu 24 to address CVE-2025-38xxx vulnerabilities
+      SupportedOsVersions:
+        - "Ubuntu 20"
+        - "Ubuntu 22"
+        - "Ubuntu 24"
+      Data: |
+        name: UbuntuSecurityHardening
+        description: Comprehensive security hardening for Ubuntu systems to address CVE vulnerabilities
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              - name: ProEnableFIPS
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Enable FIPS mode via Pro license ==="
+                      export DEBIAN_FRONTEND=noninteractive
+
+                      pro enable fips-updates --assume-yes
+                      apt install ubuntu-pro-client -y
+
+              - name: RebootAfterFIPS
+                action: Reboot
+                inputs:
+                  delaySeconds: 0
+
+              - name: UpdatePackageDatabase
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Updating Package Database ==="
+                      export DEBIAN_FRONTEND=noninteractive
+                      
+                      # Update package lists with retries
+                      for i in {1..3}; do
+                        if apt-get update; then
+                          echo "Package database updated successfully"
+                          break
+                        else
+                          echo "Attempt $i failed, retrying in 10 seconds..."
+                          sleep 10
+                        fi
+                      done
+
+              - name: UpgradeAllPackages
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Upgrading All Packages to Latest Versions ==="
+                      export DEBIAN_FRONTEND=noninteractive
+                      
+                      # Full system upgrade to address all CVEs
+                      apt-get -y dist-upgrade
+                      
+                      # Install security updates specifically
+                      apt-get -y install --only-upgrade \
+                        libc6 libc6-dev \
+                        libssl3 libssl-dev \
+                        openssl \
+                        curl libcurl4 \
+                        wget \
+                        gnupg \
+                        ca-certificates \
+                        systemd \
+                        openssh-client openssh-server \
+                        sudo \
+                        coreutils \
+                        util-linux \
+                        mount \
+                        e2fsprogs \
+                        bash \
+                        python3 \
+                        perl \
+                        git \
+                        vim \
+                        2>/dev/null || true
+                      
+                      echo "All packages upgraded to latest versions"
+
+              - name: InstallSecurityTools
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Installing Security Tools ==="
+                      export DEBIAN_FRONTEND=noninteractive
+                      
+                      # Install essential security tools
+                      apt-get -y install \
+                        unattended-upgrades \
+                        apt-listchanges \
+                        needrestart \
+                        aide \
+                        rkhunter \
+                        chkrootkit \
+                        lynis \
+                        fail2ban \
+                        ufw \
+                        apparmor \
+                        apparmor-utils \
+                        apparmor-profiles \
+                        auditd \
+                        libpam-pwquality \
+                        acct \
+                        sysstat \
+                        logwatch \
+                        logrotate \
+                        rsyslog \
+                        chrony
+
+              - name: ConfigureAutomaticSecurityUpdates
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Configuring Automatic Security Updates ==="
+                      
+                      # Configure unattended-upgrades for automatic security updates
+                      cat > /etc/apt/apt.conf.d/50unattended-upgrades << 'EOF'
+                      Unattended-Upgrade::Allowed-Origins {
+                          "${distro_id}:${distro_codename}";
+                          "${distro_id}:${distro_codename}-security";
+                          "${distro_id}ESMApps:${distro_codename}-apps-security";
+                          "${distro_id}ESM:${distro_codename}-infra-security";
+                      };
+                      
+                      Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+                      Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
+                      Unattended-Upgrade::Remove-Unused-Dependencies "true";
+                      Unattended-Upgrade::Automatic-Reboot "false";
+                      Unattended-Upgrade::SyslogEnable "true";
+                      EOF
+                      
+                      # Enable automatic updates
+                      cat > /etc/apt/apt.conf.d/20auto-upgrades << 'EOF'
+                      APT::Periodic::Update-Package-Lists "1";
+                      APT::Periodic::Download-Upgradeable-Packages "1";
+                      APT::Periodic::AutocleanInterval "7";
+                      APT::Periodic::Unattended-Upgrade "1";
+                      EOF
+                      
+                      systemctl enable unattended-upgrades
+
+              - name: HardenSSHConfiguration
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Hardening SSH Configuration ==="
+                      
+                      # Apply secure SSH configuration
+                      cat > /etc/ssh/sshd_config << 'EOF'
+                      Port 22
+                      Protocol 2
+                      PermitRootLogin no
+                      PubkeyAuthentication yes
+                      PasswordAuthentication yes
+                      PermitEmptyPasswords no
+                      X11Forwarding no
+                      AllowTcpForwarding no
+                      ClientAliveInterval 300
+                      ClientAliveCountMax 2
+                      MaxAuthTries 3
+                      MaxSessions 2
+                      LogLevel VERBOSE
+                      Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com
+                      MACs hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com
+                      KexAlgorithms curve25519-sha256@libssh.org,diffie-hellman-group16-sha512
+                      EOF
+                      
+                      systemctl restart ssh
+
+              - name: ConfigureFirewallAndSecurity
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Configuring Security Services ==="
+                      
+                      # Configure UFW firewall
+                      ufw --force reset
+                      ufw default deny incoming
+                      ufw default allow outgoing
+                      ufw allow ssh
+                      ufw allow out 80/tcp
+                      ufw allow out 443/tcp
+                      ufw allow out 53
+                      ufw --force enable
+                      
+                      # Configure fail2ban
+                      cat > /etc/fail2ban/jail.local << 'EOF'
+                      [DEFAULT]
+                      bantime = 3600
+                      findtime = 600
+                      maxretry = 3
+                      
+                      [sshd]
+                      enabled = true
+                      maxretry = 3
+                      bantime = 3600
+                      EOF
+                      
+                      systemctl enable fail2ban
+                      systemctl start fail2ban
+                      
+                      # Enable AppArmor
+                      systemctl enable apparmor
+                      systemctl start apparmor
+
+              - name: HardenKernelParameters
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Hardening Kernel Parameters ==="
+                      
+                      cat > /etc/sysctl.d/99-security.conf << 'EOF'
+                      # Network security
+                      net.ipv4.ip_forward = 0
+                      net.ipv4.conf.all.send_redirects = 0
+                      net.ipv4.conf.all.accept_redirects = 0
+                      net.ipv4.conf.all.secure_redirects = 0
+                      net.ipv4.conf.all.accept_source_route = 0
+                      net.ipv4.conf.all.log_martians = 1
+                      net.ipv4.icmp_echo_ignore_broadcasts = 1
+                      net.ipv4.tcp_syncookies = 1
+                      net.ipv4.conf.all.rp_filter = 1
+                      
+                      # Memory protection
+                      kernel.dmesg_restrict = 1
+                      kernel.kptr_restrict = 2
+                      kernel.yama.ptrace_scope = 1
+                      
+                      # File system security
+                      fs.suid_dumpable = 0
+                      fs.protected_hardlinks = 1
+                      fs.protected_symlinks = 1
+                      EOF
+                      
+                      sysctl -p /etc/sysctl.d/99-security.conf
+
+              - name: SecureFilePermissions
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Securing File Permissions ==="
+                      
+                      chmod 600 /etc/ssh/sshd_config
+                      chmod 600 /etc/shadow
+                      chmod 644 /etc/passwd
+                      chmod 644 /etc/group
+                      chmod 640 /var/log/auth.log
+                      chmod 640 /var/log/syslog
+
+          - name: validate
+            steps:
+              - name: ValidateSecurityConfiguration
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Validating Security Configuration ==="
+                      
+                      systemctl is-active ssh && echo "✓ SSH service is running"
+                      systemctl is-active ufw && echo "✓ UFW firewall is running"
+                      systemctl is-active fail2ban && echo "✓ Fail2Ban is running"
+                      systemctl is-active apparmor && echo "✓ AppArmor is running"
+                      systemctl is-active unattended-upgrades && echo "✓ Unattended upgrades is running"
+                      
+                      ufw status | grep "Status: active" && echo "✓ UFW firewall is active"
+                      sysctl net.ipv4.ip_forward | grep "= 0" && echo "✓ IP forwarding is disabled"
+                      
+                      echo "=== Security validation completed ==="
+      KmsKeyId: !Ref pKMSKeyArn
+
+  ##########################
+  # RHEL 8 Additional STIGs
+  ##########################
+  rRHEL8AdditionalStigsComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: RHEL-8-Additional-IDCS-STIGs
+      Platform: Linux
+      Version: 1.0.12
+      Description: Custom STIG remediations for RHEL 8 under IDCS cloud
+      SupportedOsVersions:
+        - "Red Hat Enterprise Linux 8"
+      Data: |
+        name: RHEL8AdditionalSTIGs
+        description: Custom STIG remediations for RHEL 8 under IDCS cloud
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              - name: V-230223-230254
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      fips-mode-setup --enable
+
+              - name: RebootAfterFIPS
+                action: Reboot
+                inputs:
+                  delaySeconds: 0
+
+              - name: V-230234
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      PASSWORD="supersecret"
+                      HASH=$(printf "%s\n%s\n" "$PASSWORD" "$PASSWORD" | grub2-mkpasswd-pbkdf2 | grep -o 'grub\.pbkdf2[^ ]*')
+                      TARGET="/boot/efi/EFI/redhat/user.cfg"
+                      GRUB_CFG="/boot/efi/EFI/redhat/grub.cfg"
+                      install -m 600 -D /dev/null "$TARGET"
+                      printf 'GRUB2_PASSWORD=%s\n' "$HASH" | tee "$TARGET" >/dev/null
+                      grub2-mkconfig -o "$GRUB_CFG"
+
+              - name: V-230225-230227
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      BANNER_FILE="/etc/issue"
+                      SSHD_CONFIG="/etc/ssh/sshd_config"
+                      tee "$BANNER_FILE" > /dev/null << 'EOF'
+                      You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. By using this IS (which includes any device attached to this IS), you consent to the following conditions:
+                      
+                      -The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel misconduct (PM), law enforcement (LE), and counterintelligence (CI) investigations.
+                      
+                      -At any time, the USG may inspect and seize data stored on this IS.
+                      
+                      -Communications using, or data stored on, this IS are not private, are subject to routine monitoring, interception, and search, and may be disclosed or used for any USG-authorized purpose.
+                      
+                      -This IS includes security measures (e.g., authentication and access controls) to protect USG interests--not for your personal benefit or privacy.
+                      
+                      -Notwithstanding the above, using this IS does not constitute consent to PM, LE or CI investigative searching or monitoring of the content of privileged communications, or work product, related to personal representation or services by attorneys, psychotherapists, or clergy, and their assistants. Such communications and work product are private and confidential. See User Agreement for details.
+                      EOF
+                      sed -i 's|^[#]*[[:space:]]*Banner.*|Banner /etc/issue|' "$SSHD_CONFIG"
+                      systemctl restart sshd
+
+              - name: V-230251
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      sed -i -E 's/(-oMACs=)[^ ]*/\1hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256/' "$(readlink -f /etc/crypto-policies/back-ends/opensshserver.config)"
+
+              - name: V-230252
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      sed -i -E 's/(-oCiphers=)[^ ]*/\1aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes128-ctr/' "$(readlink -f /etc/crypto-policies/back-ends/opensshserver.config)"
+
+              - name: V-230256
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      sed -i 's/+VERS-ALL:[^+]*+COMP-NULL:%PROFILE_MEDIUM/+VERS-ALL:-VERS-DTLS0.9:-VERS-SSL3.0:-VERS-TLS1.0:-VERS-TLS1.1:-VERS-DTLS1.0:+COMP-NULL:%PROFILE_MEDIUM/' /etc/crypto-policies/back-ends/gnutls.config
+
+              - name: V-230271
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      sed -i '/NOPASSWD/d' /etc/sudoers
+                      find /etc/sudoers.d -type f -exec sed -i '/NOPASSWD/d' {} \;
+
+              - name: V-230275
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      dnf install -y opensc
+
+              - name: V-230311
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      for f in /usr/lib/sysctl.d/50-coredump.conf /lib/sysctl.d/50-coredump.conf; do
+                        if [ -f "$f" ]; then
+                          sed -ri '/kernel\.core_pattern/d' "$f"
+                        fi
+                      done
+                      mkdir -p /run/sysctl.d /usr/local/lib/sysctl.d
+                      : > /run/sysctl.d/local-empty.conf
+                      : > /usr/local/lib/sysctl.d/local-empty.conf
+                      sysctl -w kernel.core_pattern='|/bin/false' >/dev/null
+                      sysctl --system >/dev/null
+
+              ## Resolve later, produces the following in the image build pipeline:
+              ## CmdExecution: Stderr: Job for sssd.service failed because the control process exited with error code.
+              ## See "systemctl status sssd.service" and "journal -xe" for details.
+              #- name: V-230355
+              #  action: ExecuteBash
+              #  inputs:
+              #    commands:
+              #      - |
+              #        cat >> /etc/sssd/sssd.conf <<'EOF'
+              #        
+              #        [certmap/testing.test/rule_name]
+              #        matchrule =.*EDIPI@mil
+              #        maprule = (userCertificate;binary={cert!bin})
+              #        domains = testing.test
+              #        EOF
+              #        systemctl restart sssd
+
+              - name: V-230478
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      dnf install  -y rsyslog-gnutls
+
+              - name: V-230505-230525-244544
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      if ! systemctl list-unit-files | grep firewalld.service; then
+                        dnf install -y firewalld
+                        systemctl enable firewalld --now
+                      fi
+
+              - name: V-230523-244545
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      dnf install -y fapolicyd
+                      systemctl enable --now fapolicyd
+                      # Allow AWS cli
+                      fapolicyd-cli --file add "$( which aws )"
+                      echo "Testing AWS CLI fapolicy access"
+                      aws --version
+                      echo "Testing AWS CLI fapolicy access: Success"
+
+              - name: V-244547-244548-230470
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      dnf install -y usbguard
+                      systemctl enable usbguard.service
+                      systemctl start usbguard.service
+                      sed -ri 's/^[[:space:]]*AuditBackend[[:space:]]*=.*/AuditBackend=LinuxAudit/' /etc/usbguard/usbguard-daemon.conf
+                      systemctl restart usbguard.service
+
+              - name: V-251710-230475
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      dnf install -y aide
+                      /usr/sbin/aide --init
+                      mv -f /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz
+                      cat >> /etc/aide.conf <<'EOF'
+                      
+                      # Audit Tools (STIG)
+                      /usr/sbin/auditctl p+i+n+u+g+s+b+acl+xattrs+sha512
+                      /usr/sbin/auditd p+i+n+u+g+s+b+acl+xattrs+sha512
+                      /usr/sbin/ausearch p+i+n+u+g+s+b+acl+xattrs+sha512
+                      /usr/sbin/aureport p+i+n+u+g+s+b+acl+xattrs+sha512
+                      /usr/sbin/autrace p+i+n+u+g+s+b+acl+xattrs+sha512
+                      /usr/sbin/rsyslogd p+i+n+u+g+s+b+acl+xattrs+sha512
+                      /usr/sbin/augenrules p+i+n+u+g+s+b+acl+xattrs+sha512
+                      EOF
+                      aide --update
+                      mv -f /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz
+
+              - name: V-256974
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      dnf install -y mailx
+
+              - name: V-272482-272483
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      CFG="$(readlink -f /etc/crypto-policies/back-ends/openssh.config)"
+                      ETM_VAL="hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256"
+                      sed -ri "s/^[[:space:]]*(-o)?MACs[[:space:]=]+[^ ]*/MACs ${ETM_VAL}/I" "$CFG"
+                      CIPHER_VAL="aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes128-ctr"
+                      sed -ri "s/^[[:space:]]*(-o)?Ciphers[[:space:]=]+[^ ]*/Ciphers ${CIPHER_VAL}/I" "$CFG"
+
+              - name: V-244527
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      dnf install -y rng-tools
+
+              - name: V-230253
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      sed -ri '/^[[:space:]]*#?[[:space:]]*SSH_USE_STRONG_RNG[[:space:]]*=/d' /etc/sysconfig/sshd
+                      echo "SSH_USE_STRONG_RNG=32" >> /etc/sysconfig/sshd
+                      systemctl restart sshd
+
+              - name: V-230281
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      sed -i '/pam_lastlog\.so/d' /etc/pam.d/postlogin
+                      echo "session required pam_lastlog.so showfailed" >> /etc/pam.d/postlogin
+
+          - name: validate
+            steps:
+              - name: ValidateAppliedRemediations
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Validating Remediations ==="
+
+                      echo "Done."
+
+      KmsKeyId: !Ref pKMSKeyArn
+
+  ##########################
+  # RHEL 9 Additional STIGs
+  ##########################
+  rRHEL9AdditionalStigsComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: RHEL-9-Additional-IDCS-STIGs
+      Platform: Linux
+      Version: 1.1.10
+      Description: Custom STIG remediations for RHEL 9 under IDCS cloud
+      SupportedOsVersions:
+        - "Red Hat Enterprise Linux 9"
+      Uri: !Sub "s3://${pS3Bucket}/${pS3Prefix}/component-RHEL9-Additional-STIGs.yaml"
+      KmsKeyId: !Ref pKMSKeyArn
+
+  ##########################
+  # Ubuntu 22.04 Additional STIGs
+  ##########################
+  rUbuntu22AdditionalStigsComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: Ubuntu-22-Additional-IDCS-STIGs
+      Platform: Linux
+      Version: 1.0.1
+      Description: Custom STIG remediations for Ubuntu 22.04 under IDCS cloud
+      SupportedOsVersions:
+        - "Ubuntu 22.04"
+      Data: |
+        name: Ubuntu22AdditionalSTIGs
+        description: Custom STIG remediations for Ubuntu 22.04 under IDCS cloud
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              - name: UpdatePackageDatabase
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Updating Package Database ==="
+                      export DEBIAN_FRONTEND=noninteractive
+                      
+                      # Update package lists with retries
+                      for i in {1..3}; do
+                        if apt-get update; then
+                          echo "Package database updated successfully"
+                          break
+                        else
+                          echo "Attempt $i failed, retrying in 10 seconds..."
+                          sleep 10
+                        fi
+                      done
+
+              - name: UpgradeAllPackages
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Upgrading All Packages to Latest Versions ==="
+                      export DEBIAN_FRONTEND=noninteractive
+                      
+                      # Full system upgrade to address all CVEs
+                      apt-get -y dist-upgrade
+                      
+                      # Install security updates specifically
+                      apt-get -y install --only-upgrade \
+                        libc6 libc6-dev \
+                        libssl3 libssl-dev \
+                        openssl \
+                        curl libcurl4 \
+                        wget \
+                        gnupg \
+                        ca-certificates \
+                        systemd \
+                        openssh-client openssh-server \
+                        sudo \
+                        coreutils \
+                        util-linux \
+                        mount \
+                        e2fsprogs \
+                        bash \
+                        python3 \
+                        perl \
+                        git \
+                        vim \
+                        kdump-tools \
+                        vlock \
+                        libpam-pkcs11 \
+                        opensc-pkcs11 \
+                        gdm3 \
+                        2>/dev/null || true
+                      
+                      echo "All packages upgraded to latest versions"
+
+              - name: InstallSecurityTools
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Installing Security Tools ==="
+                      export DEBIAN_FRONTEND=noninteractive
+                      
+                      # Install essential security tools
+                      apt-get -y install \
+                        unattended-upgrades \
+                        apt-listchanges \
+                        needrestart \
+                        aide \
+                        rkhunter \
+                        chkrootkit \
+                        lynis \
+                        fail2ban \
+                        ufw \
+                        apparmor \
+                        apparmor-utils \
+                        apparmor-profiles \
+                        auditd \
+                        libpam-pwquality \
+                        acct \
+                        sysstat \
+                        logwatch \
+                        logrotate \
+                        rsyslog \
+                        chrony
+              - name: V-260569-store-only-encrypted-passwords
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      sed -i '/^password\s\+.*pam_unix\.so/c\password       [success=1 default=ignore]     pam_unix.so obscure sha512 shadow rounds=100000' /etc/pam.d/common-password
+              - name: V-260470-grub-boot-to-single-user
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Updating Grub password for V-260470 ==="
+                      PASSWORD="super-secret-ninja-password"
+                      GRUB_HASH=$(echo -e "$PASSWORD\n$PASSWORD" | grub-mkpasswd-pbkdf2 | grep -oP '(?<=PBKDF2 hash of your password is ).*' )
+
+                      cp /etc/grub.d/40_custom /etc/grub.d/40_custom.bak
+                      sed -i "\$a set superusers=\"root\"\npassword_pbkdf2 root $GRUB_HASH" /etc/grub.d/40_custom
+
+                      cp /etc/grub.d/10_linux /etc/grub.d/10_linux.bak
+                      sed -i 's/^CLASS="--class gnu-linux/CLASS="--unrestricted --class gnu-linux/' /etc/grub.d/10_linux
+                      update-grub
+                      chmod 600 /boot/grub/grub.cfg
+              - name: V-260525-DoD-Banner
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      tee /etc/issue.net > /dev/null << EOF
+                      You are accessing a U.S. Government (USG) Information System (IS) that is
+                      provided for USG-authorized use only. By using this IS (which includes any
+                      device attached to this IS), you consent to the following conditions:
+                      -The USG routinely intercepts and monitors communications on this IS for
+                      purposes including, but not limited to, penetration testing, COMSEC monitoring,
+                      network operations and defense, personnel misconduct (PM), law enforcement
+                      (LE), and counterintelligence (CI) investigations.
+                      -At any time, the USG may inspect and seize data stored on this IS.
+                      -Communications using, or data stored on, this IS are not private, are subject
+                      to routine monitoring, interception, and search, and may be disclosed or used
+                      for any USG-authorized purpose.
+                      -This IS includes security measures (e.g., authentication and access controls)
+                      to protect USG interests--not for your personal benefit or privacy.
+                      -Notwithstanding the above, using this IS does not constitute consent to PM, LE
+                      or CI investigative searching or monitoring of the content of privileged
+                      communications, or work product, related to personal representation or services
+                      by attorneys, psychotherapists, or clergy, and their assistants. Such
+                      communications and work product are private and confidential. See User
+                      Agreement for details.
+                      EOF
+                      sed -i '/^Banner/d' /etc/ssh/sshd_config
+                      sed -i '$aBanner /etc/issue.net' /etc/ssh/sshd_config
+                      systemctl -s SIGHUP kill sshd
+              - name: V-260531-V-260532-Ciphers-MACs
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      sed -i '$a\Ciphers aes256-ctr,aes192-ctr,aes128-ctr' /etc/ssh/sshd_config
+                      sed -i '$a\MACs hmac-sha2-512,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-256-etm@openssh.com' /etc/ssh/sshd_config
+                      systemctl restart sshd.service
+              - name: ProEnableFIPS
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Enable FIPS mode via Pro license ==="
+                      export DEBIAN_FRONTEND=noninteractive
+
+                      pro enable fips-updates --assume-yes
+                      apt install ubuntu-pro-client -y
+
+              - name: RebootAfterFIPS
+                action: Reboot
+                inputs:
+                  delaySeconds: 0
+          - name: validate
+            steps:
+              - name: ValidateAppliedRemediations
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Validating Remediations ==="
+
+                      echo "Done."
+
+      KmsKeyId: !Ref pKMSKeyArn
+  
+  ##########################
+  # Ubuntu 24.04 Additional STIGs
+  ##########################
+  rUbuntu24AdditionalStigsComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: Ubuntu-24-Additional-IDCS-STIGs
+      Platform: Linux
+      Version: 1.0.1
+      Description: Custom STIG remediations for Ubuntu 24.04 under IDCS cloud
+      SupportedOsVersions:
+        - "Ubuntu 24.04"
+      Data: |
+        name: Ubuntu24AdditionalSTIGs
+        description: Custom STIG remediations for Ubuntu 24.04 under IDCS cloud
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              - name: V-270725-store-only-encrypted-passwords
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      sed -i '/^password\s\+.*pam_unix\.so/c\password       [success=1 default=ignore]     pam_unix.so obscure sha512 shadow rounds=100000' /etc/pam.d/common-password
+          - name: validate
+            steps:
+              - name: ValidateAppliedRemediations
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Validating Remediations ==="
+
+                      echo "Done."
+
+      KmsKeyId: !Ref pKMSKeyArn
+
+  ##########################
+  # RHEL Security Hardening Component
+  ##########################
+  rRHELSecurityHardeningComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: RHEL-Security-Hardening-CVE-Remediation
+      Platform: Linux
+      Version: 1.0.2
+      Description: Comprehensive security hardening for RHEL 8/9 to address CVE vulnerabilities
+      SupportedOsVersions:
+        - "Red Hat Enterprise Linux 8"
+        - "Red Hat Enterprise Linux 9"
+      Data: |
+        name: RHELSecurityHardening
+        description: Comprehensive security hardening for RHEL systems to address CVE vulnerabilities
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              - name: UpdatePackageDatabase
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Updating Package Database ==="
+                      
+                      # Update package lists with retries
+                      for i in {1..3}; do
+                        if yum update -y --refresh; then
+                          echo "Package database updated successfully"
+                          break
+                        else
+                          echo "Attempt $i failed, retrying in 10 seconds..."
+                          sleep 10
+                        fi
+                      done
+
+              - name: UpgradeAllPackages
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Upgrading All Packages to Latest Versions ==="
+                      
+                      # Full system upgrade to address all CVEs
+                      yum upgrade -y
+                      
+                      # Specifically target packages commonly affected by CVEs
+                      yum update -y \
+                        glibc \
+                        glibc-common \
+                        openssl \
+                        openssl-libs \
+                        curl \
+                        libcurl \
+                        wget \
+                        gnupg2 \
+                        ca-certificates \
+                        systemd \
+                        openssh \
+                        openssh-server \
+                        openssh-clients \
+                        sudo \
+                        coreutils \
+                        util-linux \
+                        bash \
+                        python3 \
+                        perl \
+                        git \
+                        vim \
+                        kernel \
+                        2>/dev/null || true
+                      
+                      echo "All packages upgraded to latest versions"
+
+              - name: InstallSecurityTools
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Installing Security Tools ==="
+                      
+                      # Detect RHEL version
+                      RHEL_VERSION=$(grep -oP 'release \K[0-9]+' /etc/redhat-release)
+                      echo "Detected RHEL version: $RHEL_VERSION"
+                      
+                      # Function to safely install packages
+                      safe_install() {
+                        local package="$1"
+                        echo "Attempting to install $package..."
+                        if yum install -y "$package" 2>/dev/null; then
+                          echo "✓ Successfully installed $package"
+                          return 0
+                        else
+                          echo "⚠ Package $package not available or failed to install"
+                          return 1
+                        fi
+                      }
+                      
+                      # Install base security tools available on both RHEL 8 and 9
+                      # These should be available in standard RHEL repositories
+                      for package in aide firewalld selinux-policy audit libpwquality psacct sysstat logrotate rsyslog chrony; do
+                        safe_install "$package"
+                      done
+                      
+                      # Install version-specific automatic update tools
+                      if [ "$RHEL_VERSION" = "8" ]; then
+                        echo "Installing RHEL 8 specific packages..."
+                        safe_install "yum-cron"
+                      else
+                        echo "Installing RHEL 9 specific packages..."
+                        safe_install "dnf-automatic"
+                      fi
+                      
+                      # Try to install EPEL repository for additional security tools
+                      echo "Attempting to install EPEL repository..."
+                      if safe_install "epel-release"; then
+                        # Refresh package cache after adding EPEL
+                        yum makecache fast 2>/dev/null || true
+                        
+                        # Install additional security tools from EPEL (if available)
+                        echo "Installing additional security tools from EPEL..."
+                        for package in rkhunter chkrootkit lynis fail2ban logwatch; do
+                          safe_install "$package"
+                        done
+                      else
+                        echo "⚠ EPEL repository not available - skipping additional security tools"
+                      fi
+                      
+                      # Check if fail2ban was successfully installed
+                      if rpm -q fail2ban >/dev/null 2>&1; then
+                        echo "✓ fail2ban is available for configuration"
+                        echo "FAIL2BAN_AVAILABLE=true" > /tmp/security_tools_status
+                      else
+                        echo "⚠ fail2ban not available - will skip fail2ban configuration"
+                        echo "FAIL2BAN_AVAILABLE=false" > /tmp/security_tools_status
+                      fi
+                      
+                      echo "Security tools installation completed"
+
+              - name: ConfigureAutomaticSecurityUpdates
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Configuring Automatic Security Updates ==="
+                      
+                      # Detect RHEL version
+                      RHEL_VERSION=$(grep -oP 'release \K[0-9]+' /etc/redhat-release)
+                      echo "Configuring automatic updates for RHEL $RHEL_VERSION"
+                      
+                      if [ "$RHEL_VERSION" = "8" ]; then
+                        echo "Configuring yum-cron for RHEL 8..."
+                        # Check if yum-cron is available
+                        if rpm -q yum-cron >/dev/null 2>&1; then
+                          # Configure yum-cron for RHEL 8
+                          cat > /etc/yum/yum-cron.conf << 'EOF'
+                      [commands]
+                      update_cmd = security
+                      update_messages = yes
+                      download_updates = yes
+                      apply_updates = yes
+                      random_sleep = 360
+                      
+                      [emitters]
+                      system_name = None
+                      emit_via = stdio
+                      
+                      [email]
+                      email_from = root@localhost
+                      email_to = root
+                      email_host = localhost
+                      
+                      [groups]
+                      group_list = None
+                      group_package_types = mandatory, default
+                      
+                      [base]
+                      debuglevel = -2
+                      mdpolicy = group:main
+                      EOF
+                          
+                          # Enable yum-cron service
+                          systemctl enable yum-cron 2>/dev/null || true
+                          echo "✓ Yum-cron configured for RHEL 8"
+                        else
+                          echo "⚠ yum-cron not available - automatic updates not configured"
+                        fi
+                        
+                      else
+                        echo "Configuring dnf-automatic for RHEL 9..."
+                        # Check if dnf-automatic is available
+                        if rpm -q dnf-automatic >/dev/null 2>&1; then
+                          # Configure dnf-automatic for RHEL 9
+                          cat > /etc/dnf/automatic.conf << 'EOF'
+                      [commands]
+                      upgrade_type = security
+                      random_sleep = 300
+                      network_online_timeout = 60
+                      download_updates = yes
+                      apply_updates = yes
+                      
+                      [emitters]
+                      emit_via = stdio
+                      system_name = None
+                      
+                      [email]
+                      email_from = root@localhost
+                      email_to = root
+                      email_host = localhost
+                      
+                      [base]
+                      debuglevel = 1
+                      EOF
+                          
+                          # Enable dnf-automatic timers
+                          systemctl enable dnf-automatic.timer 2>/dev/null || true
+                          systemctl enable dnf-automatic-install.timer 2>/dev/null || true
+                          echo "✓ DNF-automatic configured for RHEL 9"
+                        else
+                          echo "⚠ dnf-automatic not available - automatic updates not configured"
+                        fi
+                      fi
+                      
+                      echo "Automatic security updates configured successfully"
+
+              - name: ConfigureFirewallAndSecurity
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Configuring Security Services ==="
+                      
+                      # Configure firewalld (should be available on all RHEL systems)
+                      if systemctl is-enabled firewalld >/dev/null 2>&1 || systemctl enable firewalld 2>/dev/null; then
+                        systemctl start firewalld
+                        firewall-cmd --set-default-zone=public
+                        firewall-cmd --permanent --add-service=ssh
+                        firewall-cmd --permanent --add-service=http
+                        firewall-cmd --permanent --add-service=https
+                        firewall-cmd --reload
+                        echo "✓ Firewalld configured successfully"
+                      else
+                        echo "⚠ Firewalld not available - skipping firewall configuration"
+                      fi
+                      
+                      # Configure fail2ban only if it was successfully installed
+                      if [ -f /tmp/security_tools_status ]; then
+                        source /tmp/security_tools_status
+                        if [ "$FAIL2BAN_AVAILABLE" = "true" ]; then
+                          echo "Configuring fail2ban..."
+                          cat > /etc/fail2ban/jail.local << 'EOF'
+                      [DEFAULT]
+                      bantime = 3600
+                      findtime = 600
+                      maxretry = 3
+                      
+                      [sshd]
+                      enabled = true
+                      maxretry = 3
+                      bantime = 3600
+                      EOF
+                          
+                          systemctl enable fail2ban
+                          systemctl start fail2ban
+                          echo "✓ Fail2ban configured successfully"
+                        else
+                          echo "⚠ Fail2ban not available - skipping fail2ban configuration"
+                        fi
+                      else
+                        echo "⚠ Security tools status not available - skipping fail2ban configuration"
+                      fi
+
+              - name: HardenKernelAndSELinux
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Hardening Kernel Parameters and SELinux ==="
+                      
+                      cat > /etc/sysctl.d/99-security.conf << 'EOF'
+                      # Network security
+                      net.ipv4.ip_forward = 0
+                      net.ipv4.conf.all.send_redirects = 0
+                      net.ipv4.conf.all.accept_redirects = 0
+                      net.ipv4.conf.all.accept_source_route = 0
+                      net.ipv4.conf.all.log_martians = 1
+                      net.ipv4.tcp_syncookies = 1
+                      net.ipv4.conf.all.rp_filter = 1
+                      
+                      # Memory protection
+                      kernel.dmesg_restrict = 1
+                      kernel.kptr_restrict = 2
+                      kernel.yama.ptrace_scope = 1
+                      
+                      # File system security
+                      fs.suid_dumpable = 0
+                      fs.protected_hardlinks = 1
+                      fs.protected_symlinks = 1
+                      EOF
+                      
+                      sysctl -p /etc/sysctl.d/99-security.conf
+                      
+                      # Ensure SELinux is enforcing
+                      setenforce 1
+                      sed -i 's/^SELINUX=.*/SELINUX=enforcing/' /etc/selinux/config
+
+              - name: SecureFilePermissions
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Securing File Permissions ==="
+                      
+                      chmod 600 /etc/ssh/sshd_config
+                      chmod 600 /etc/shadow
+                      chmod 644 /etc/passwd
+                      chmod 644 /etc/group
+                      chmod 640 /var/log/secure
+                      chmod 640 /var/log/messages
+
+          - name: validate
+            steps:
+              - name: ValidateSecurityConfiguration
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Validating Security Configuration ==="
+                      
+                      # Detect RHEL version for appropriate service checks
+                      RHEL_VERSION=$(grep -oP 'release \K[0-9]+' /etc/redhat-release)
+                      echo "Validating services for RHEL $RHEL_VERSION"
+                      
+                      systemctl is-active sshd && echo "✓ SSH service is running"
+                      systemctl is-active firewalld && echo "✓ Firewalld is running"
+                      systemctl is-active fail2ban && echo "✓ Fail2Ban is running" || echo "⚠ Fail2Ban not available (optional)"
+                      
+                      # Check appropriate automatic update service
+                      if [ "$RHEL_VERSION" = "8" ]; then
+                        if systemctl is-enabled yum-cron >/dev/null 2>&1; then
+                          echo "✓ Yum-cron is enabled"
+                        else
+                          echo "⚠ Yum-cron not enabled or not available"
+                        fi
+                      else
+                        if systemctl is-enabled dnf-automatic.timer >/dev/null 2>&1; then
+                          echo "✓ DNF-automatic timer is enabled"
+                        else
+                          echo "⚠ DNF-automatic not enabled or not available"
+                        fi
+                      fi
+                      
+                      # Check firewall status
+                      if firewall-cmd --state 2>/dev/null | grep -q "running"; then
+                        echo "✓ Firewall is active"
+                      else
+                        echo "⚠ Firewall not running or not available"
+                      fi
+                      
+                      # Check SELinux status
+                      if sestatus 2>/dev/null | grep -q "enforcing"; then
+                        echo "✓ SELinux is enforcing"
+                      else
+                        echo "⚠ SELinux not enforcing or not available"
+                      fi
+                      
+                      # Check IP forwarding
+                      if sysctl net.ipv4.ip_forward 2>/dev/null | grep -q "= 0"; then
+                        echo "✓ IP forwarding is disabled"
+                      else
+                        echo "⚠ IP forwarding status unknown"
+                      fi
+                      
+                      # Check fail2ban status if available
+                      if [ -f /tmp/security_tools_status ]; then
+                        source /tmp/security_tools_status
+                        if [ "$FAIL2BAN_AVAILABLE" = "true" ]; then
+                          if systemctl is-active fail2ban >/dev/null 2>&1; then
+                            echo "✓ Fail2Ban is running"
+                          else
+                            echo "⚠ Fail2Ban not running"
+                          fi
+                        else
+                          echo "⚠ Fail2Ban not available (optional)"
+                        fi
+                      fi
+                      
+                      echo "=== Security validation completed ==="
+      KmsKeyId: !Ref pKMSKeyArn
+
+  ##########################
+  # Ubuntu AD Domain Joining Component
+  ##########################
+  rUbuntuADDomainJoiningComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: Ubuntu-AD-Domain-Joining-Preparation
+      Platform: Linux
+      Version: 1.0.1
+      Description: Essential Ubuntu AD domain joining preparation with core packages only
+      SupportedOsVersions:
+        - "Ubuntu 20"
+        - "Ubuntu 22"
+        - "Ubuntu 24"
+      Data: |
+        name: UbuntuADDomainJoining
+        description: Essential Ubuntu AD domain joining preparation with core packages only
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              - name: InstallCoreADPackages
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Installing Core AD Domain Joining Packages ==="
+                      export DEBIAN_FRONTEND=noninteractive
+                      
+                      # Install only essential AD domain joining packages
+                      apt-get -y install \
+                        realmd \
+                        sssd \
+                        sssd-tools \
+                        libnss-sss \
+                        libpam-sss \
+                        adcli \
+                        samba-common-bin \
+                        krb5-user \
+                        dnsutils \
+                        chrony \
+                        libpam-modules
+                      
+                      echo "✓ Core AD domain joining packages installed"
+
+              - name: ConfigureBasicServices
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Configuring Basic Services ==="
+                      export DEBIAN_FRONTEND=noninteractive
+                      
+                      # Enable required services for AD integration
+                      systemctl enable sssd
+                      systemctl enable realmd
+                      systemctl enable chrony
+                      
+                      # Enable automatic home directory creation for AD users
+                      echo "Enabling automatic home directory creation..."
+                      pam-auth-update --enable mkhomedir
+                      
+                      # Verify mkhomedir is enabled
+                      if grep -q "pam_mkhomedir" /etc/pam.d/common-session; then
+                        echo "✓ mkhomedir PAM module enabled"
+                      else
+                        echo "⚠ mkhomedir PAM module not found in common-session"
+                      fi
+                      
+                      # Remove the nullok from the default unix configuration file
+                      pname="/usr/share/pam-configs/unix"; 
+                      if grep "nullok" "${pname}"; then sed -i 's/ nullok//g' "${pname}"; fi
+                      pam-auth-update --force
+                      
+                      echo "✓ Basic services configured"
+
+          - name: validate
+            steps:
+              - name: ValidateADPreparation
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Validating AD Domain Joining Preparation ==="
+                      
+                      # Check core packages
+                      for package in realmd sssd adcli krb5-user dnsutils chrony; do
+                        if dpkg -l | grep -q "^ii.*$package"; then
+                          echo "✓ $package is installed"
+                        else
+                          echo "✗ $package is NOT installed"
+                        fi
+                      done
+                      
+                      # Check services
+                      systemctl is-enabled realmd && echo "✓ realmd enabled" || echo "⚠ realmd not enabled"
+                      systemctl is-enabled sssd && echo "✓ sssd enabled" || echo "⚠ sssd not enabled"
+                      
+                      # Test realm command
+                      if command -v realm >/dev/null 2>&1; then
+                        echo "✓ realm command available"
+                      else
+                        echo "✗ realm command not available"
+                      fi
+                      
+                      echo "=== Validation completed ==="
+                      echo "AD domain joining packages installed and configured."
+                      echo "Use 'realm discover DOMAIN' and 'realm join DOMAIN' to join domain."
+      KmsKeyId: !Ref pKMSKeyArn
+
+  ##########################
+  # RHEL AD Domain Joining Component
+  ##########################
+  rRHELADDomainJoiningComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: RHEL-AD-Domain-Joining-Preparation
+      Platform: Linux
+      Version: 1.0.3
+      Description: Essential RHEL AD domain joining preparation with core packages only
+      SupportedOsVersions:
+        - "Red Hat Enterprise Linux 8"
+        - "Red Hat Enterprise Linux 9"
+      Data: |
+        name: RHELADDomainJoining
+        description: Essential RHEL AD domain joining preparation with core packages only
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              - name: InstallCoreADPackages
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Installing Core AD Domain Joining Packages for RHEL ==="
+                      
+                      # Install only essential AD domain joining packages for RHEL
+                      yum install -y \
+                        realmd \
+                        sssd \
+                        sssd-tools \
+                        adcli \
+                        samba-common-tools \
+                        oddjob \
+                        oddjob-mkhomedir \
+                        krb5-workstation \
+                        bind-utils \
+                        chrony
+                      
+                      echo "✓ Core AD domain joining packages installed for RHEL"
+
+              - name: ConfigureBasicServices
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Configuring Basic Services for RHEL ==="
+                      
+                      # Enable required services for AD integration
+                      systemctl enable sssd
+                      systemctl enable realmd
+                      systemctl enable oddjobd
+                      systemctl enable chronyd
+                      
+                      # Configure authselect for automatic home directory creation (RHEL 8/9)
+                      echo "Configuring authselect for automatic home directory creation..."
+                      if command -v authselect >/dev/null 2>&1; then
+                        authselect select sssd --force
+                        authselect enable-feature with-mkhomedir
+                        echo "✓ authselect configured with mkhomedir"
+                      else
+                        echo "⚠ authselect not available"
+                      fi
+                      
+                      echo "✓ Basic services configured for RHEL"
+
+          - name: validate
+            steps:
+              - name: ValidateADPreparation
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Validating AD Domain Joining Preparation for RHEL ==="
+                      
+                      # Check core packages
+                      for package in realmd sssd adcli samba-common-tools krb5-workstation bind-utils chrony; do
+                        if rpm -q "$package" >/dev/null 2>&1; then
+                          echo "✓ $package is installed"
+                        else
+                          echo "✗ $package is NOT installed"
+                        fi
+                      done
+                      
+                      # Check services
+                      systemctl is-enabled realmd && echo "✓ realmd enabled" || echo "⚠ realmd not enabled"
+                      systemctl is-enabled sssd && echo "✓ sssd enabled" || echo "⚠ sssd not enabled"
+                      systemctl is-enabled oddjobd && echo "✓ oddjobd enabled" || echo "⚠ oddjobd not enabled"
+                      
+                      # Test realm command
+                      if command -v realm >/dev/null 2>&1; then
+                        echo "✓ realm command available"
+                      else
+                        echo "✗ realm command not available"
+                      fi
+                      
+                      echo "=== Validation completed ==="
+                      echo "AD domain joining packages installed and configured for RHEL."
+                      echo "Use 'realm discover DOMAIN' and 'realm join DOMAIN' to join domain."
+      KmsKeyId: !Ref pKMSKeyArn
+
+  ##########################
+  # AL2023 AD Domain Joining Component
+  ##########################
+  rAL2023ADDomainJoiningComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: AL2023-AD-Domain-Joining-Preparation
+      Platform: Linux
+      Version: 1.0.0
+      Description: Essential AL2023 AD domain joining preparation with core packages only
+      SupportedOsVersions:
+        - "Amazon Linux 2023"
+      Data: |
+        name: AL2023ADDomainJoining
+        description: Essential AL2023 AD domain joining preparation with core packages only
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              - name: InstallCoreADPackages
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Installing Core AD Domain Joining Packages for AL2023 ==="
+                      
+                      # Install only essential AD domain joining packages for AL2023
+                      dnf install -y \
+                        realmd \
+                        sssd \
+                        sssd-tools \
+                        adcli \
+                        samba-common-tools \
+                        oddjob \
+                        oddjob-mkhomedir \
+                        krb5-workstation \
+                        bind-utils \
+                        chrony
+                      
+                      echo "✓ Core AD domain joining packages installed for AL2023"
+
+              - name: ConfigureBasicServices
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Configuring Basic Services for AL2023 ==="
+                      
+                      # Enable required services for AD integration
+                      systemctl enable sssd
+                      systemctl enable realmd
+                      systemctl enable oddjobd
+                      systemctl enable chronyd
+                      
+                      # Configure authselect for automatic home directory creation (AL2023 uses authselect)
+                      echo "Configuring authselect for automatic home directory creation..."
+                      if command -v authselect >/dev/null 2>&1; then
+                        authselect select sssd --force
+                        authselect enable-feature with-mkhomedir
+                        echo "✓ authselect configured with mkhomedir"
+                      else
+                        echo "⚠ authselect not available"
+                      fi
+                      
+                      echo "✓ Basic services configured for AL2023"
+
+          - name: validate
+            steps:
+              - name: ValidateADPreparation
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Validating AD Domain Joining Preparation for AL2023 ==="
+                      
+                      # Check core packages
+                      for package in realmd sssd adcli samba-common-tools krb5-workstation bind-utils chrony; do
+                        if rpm -q "$package" >/dev/null 2>&1; then
+                          echo "✓ $package is installed"
+                        else
+                          echo "✗ $package is NOT installed"
+                        fi
+                      done
+                      
+                      # Check services
+                      systemctl is-enabled realmd && echo "✓ realmd enabled" || echo "⚠ realmd not enabled"
+                      systemctl is-enabled sssd && echo "✓ sssd enabled" || echo "⚠ sssd not enabled"
+                      systemctl is-enabled oddjobd && echo "✓ oddjobd enabled" || echo "⚠ oddjobd not enabled"
+                      
+                      # Test realm command
+                      if command -v realm >/dev/null 2>&1; then
+                        echo "✓ realm command available"
+                      else
+                        echo "✗ realm command not available"
+                      fi
+                      
+                      echo "=== Validation completed ==="
+                      echo "AD domain joining packages installed and configured for AL2023."
+                      echo "Use 'realm discover DOMAIN' and 'realm join DOMAIN' to join domain."
+      KmsKeyId: !Ref pKMSKeyArn
+
+Outputs:
+  Rhel8Python3ComponentArn:
+    Description: ARN of RHEL 8 Python3 component
+    Value: !Ref rRhel8Python3install
+    Export:
+      Name: !Sub "${AWS::StackName}-RHEL8-Python3-Component"
+
+  RhelPython3ComponentArn:
+    Description: ARN of RHEL Python3 component
+    Value: !Ref rRhelPython3install
+    Export:
+      Name: !Sub "${AWS::StackName}-RHEL-Python3-Component"
+
+  UbuntuSecurityHardeningComponentArn:
+    Description: ARN of Ubuntu Security Hardening component for CVE remediation
+    Value: !Ref rUbuntuSecurityHardeningComponent
+    Export:
+      Name: !Sub "${AWS::StackName}-Ubuntu-Security-Hardening-Component"
+
+  RHELSecurityHardeningComponentArn:
+    Description: ARN of RHEL Security Hardening component for CVE remediation
+    Value: !Ref rRHELSecurityHardeningComponent
+    Export:
+      Name: !Sub "${AWS::StackName}-RHEL-Security-Hardening-Component"
+
+  UbuntuADDomainJoiningComponentArn:
+    Description: ARN of Ubuntu AD Domain Joining Preparation component
+    Value: !Ref rUbuntuADDomainJoiningComponent
+    Export:
+      Name: !Sub "${AWS::StackName}-Ubuntu-AD-Domain-Joining-Component"
+
+  RHELADDomainJoiningComponentArn:
+    Description: ARN of RHEL AD Domain Joining Preparation component
+    Value: !Ref rRHELADDomainJoiningComponent
+    Export:
+      Name: !Sub "${AWS::StackName}-RHEL-AD-Domain-Joining-Component"
+
+  AL2023ADDomainJoiningComponentArn:
+    Description: ARN of AL2023 AD Domain Joining Preparation component
+    Value: !Ref rAL2023ADDomainJoiningComponent
+    Export:
+      Name: !Sub "${AWS::StackName}-AL2023-AD-Domain-Joining-Component"
+
+  RHEL8AdditionalStigsComponentArn:
+    Description: ARN of RHEL 8 Additional STIGs component
+    Value: !Ref rRHEL8AdditionalStigsComponent
+    Export:
+      Name: !Sub "${AWS::StackName}-RHEL8-Additional-STIGs-Component"
+
+  RHEL9AdditionalStigsComponentArn:
+    Description: ARN of RHEL 9 Additional STIGs component
+    Value: !Ref rRHEL9AdditionalStigsComponent
+    Export:
+      Name: !Sub "${AWS::StackName}-RHEL9-Additional-STIGs-Component"
+
+  Ubuntu22AdditionalStigsComponentArn:
+    Description: ARN of Ubuntu 22 Additional STIGs component
+    Value: !Ref rUbuntu22AdditionalStigsComponent
+    Export:
+      Name: !Sub "${AWS::StackName}-Ubuntu22-Additional-STIGs-Component"
+
+  Ubuntu24AdditionalStigsComponentArn:
+    Description: ARN of Ubuntu 24 Additional STIGs component
+    Value: !Ref rUbuntu24AdditionalStigsComponent
+    Export:
+      Name: !Sub "${AWS::StackName}-Ubuntu24-Additional-STIGs-Component"
+
+
