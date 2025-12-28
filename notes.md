@@ -28,3 +28,6 @@ vlock
 libpam-pkcs11
 opensc-pkcs11 
 gdm3
+
+needs libpam-pkcs11
+opensc-pkcs11

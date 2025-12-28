@@ -1,0 +1,271 @@
+##########################
+  # Ubuntu 24.04 Additional STIGs
+  ##########################
+  rUbuntu24AdditionalStigsComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: Ubuntu-24-Additional-IDCS-STIGs
+      Platform: Linux
+      Version: 1.0.1
+      Description: Custom STIG remediations for Ubuntu 24.04 under IDCS cloud
+      SupportedOsVersions:
+        - "Ubuntu 24.04"
+      Data: |
+        name: Ubuntu24AdditionalSTIGs
+        description: Custom STIG remediations for Ubuntu 24.04 under IDCS cloud
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              - name: UpdatePackageDatabase
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Updating Package Database ==="
+                      export DEBIAN_FRONTEND=noninteractive
+                      
+                      # Update package lists with retries
+                      for i in {1..3}; do
+                        if apt-get update; then
+                          echo "Package database updated successfully"
+                          break
+                        else
+                          echo "Attempt $i failed, retrying in 10 seconds..."
+                          sleep 10
+                        fi
+                      done
+
+              - name: InstallSecurityTools
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Installing Security Tools ==="
+                      export DEBIAN_FRONTEND=noninteractive
+                      
+                      # Install essential security tools
+                      apt-get -y install \
+                        unattended-upgrades \
+                        apt-listchanges \
+                        needrestart \
+                        aide \
+                        rkhunter \
+                        chkrootkit \
+                        lynis \
+                        fail2ban \
+                        ufw \
+                        apparmor \
+                        apparmor-utils \
+                        apparmor-profiles \
+                        auditd \
+                        libpam-pwquality \
+                        acct \
+                        sysstat \
+                        logwatch \
+                        logrotate \
+                        rsyslog \
+                        chrony \
+                        vlock \
+                        libpam-pkcs11 \
+                        opensc-pkcs11 \
+                        kdump-tools \
+                        audispd-plugins \
+                        openssh-client \
+                        openssh-server \
+                        2>> /tmp/security_tool_errors.log || true
+
+                        echo "All security tools installed"
+              - name: UpgradeAllPackages
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Upgrading All Packages to Latest Versions ==="
+                      export DEBIAN_FRONTEND=noninteractive
+                      
+                      # Full system upgrade to address all CVEs
+                      apt-get -y dist-upgrade
+                      
+                      # Install security updates specifically
+                      apt-get -y install --only-upgrade \
+                        libc6 libc6-dev \
+                        libssl3 libssl-dev \
+                        openssl \
+                        curl libcurl4 \
+                        wget \
+                        gnupg \
+                        ca-certificates \
+                        systemd \
+                        openssh-client \
+                        openssh-server \
+                        sudo \
+                        coreutils \
+                        util-linux \
+                        mount \
+                        e2fsprogs \
+                        bash \
+                        python3 \
+                        perl \
+                        git \
+                        vim \
+                        2>> /tmp/upgrade_errors.log || true
+                      
+                      echo "All packages upgraded to latest versions"
+
+              - name: V-260470-grub-boot-to-single-user
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Updating Grub password for V-260470 ==="
+                      PASSWORD="super-secret-ninja-password"
+                      GRUB_HASH=$(echo -e "$PASSWORD\n$PASSWORD" | grub-mkpasswd-pbkdf2 | grep -oP '(?<=PBKDF2 hash of your password is ).*' )
+
+                      cp /etc/grub.d/40_custom /etc/grub.d/40_custom.bak
+                      sed -i "\$a set superusers=\"root\"\npassword_pbkdf2 root $GRUB_HASH" /etc/grub.d/40_custom
+
+                      cp /etc/grub.d/10_linux /etc/grub.d/10_linux.bak
+                      sed -i 's/^CLASS="--class gnu-linux/CLASS="--unrestricted --class gnu-linux/' /etc/grub.d/10_linux
+                      update-grub
+                      chmod 600 /boot/grub/grub.cfg
+              - name: V-260525-DoD-Banner
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      tee /etc/issue.net > /dev/null << EOF
+                      You are accessing a U.S. Government (USG) Information System (IS) that is
+                      provided for USG-authorized use only. By using this IS (which includes any
+                      device attached to this IS), you consent to the following conditions:
+                      -The USG routinely intercepts and monitors communications on this IS for
+                      purposes including, but not limited to, penetration testing, COMSEC monitoring,
+                      network operations and defense, personnel misconduct (PM), law enforcement
+                      (LE), and counterintelligence (CI) investigations.
+                      -At any time, the USG may inspect and seize data stored on this IS.
+                      -Communications using, or data stored on, this IS are not private, are subject
+                      to routine monitoring, interception, and search, and may be disclosed or used
+                      for any USG-authorized purpose.
+                      -This IS includes security measures (e.g., authentication and access controls)
+                      to protect USG interests--not for your personal benefit or privacy.
+                      -Notwithstanding the above, using this IS does not constitute consent to PM, LE
+                      or CI investigative searching or monitoring of the content of privileged
+                      communications, or work product, related to personal representation or services
+                      by attorneys, psychotherapists, or clergy, and their assistants. Such
+                      communications and work product are private and confidential. See User
+                      Agreement for details.
+                      EOF
+                      sed -i '/^Banner/d' /etc/ssh/sshd_config
+                      sed -i '$aBanner /etc/issue.net' /etc/ssh/sshd_config
+                      systemctl -s SIGHUP kill sshd
+              - name: V-260531-V-260532-Ciphers-MACs
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      sed -i '$a\Ciphers aes256-ctr,aes192-ctr,aes128-ctr' /etc/ssh/sshd_config
+                      sed -i '$a\MACs hmac-sha2-512,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-256-etm@openssh.com' /etc/ssh/sshd_config
+                      systemctl restart sshd.service
+              - name: V-260579-authenticate-user-for-PKI
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      cp /usr/share/doc/libpam-pkcs11/examples/pam_pkcs11.conf.example /etc/pam_pkcs11/pam_pkcs11.conf
+                      sed -i 's/^/#/' /etc/pam_pkcs11/pam_pkcs11.conf
+                      sed -i 's|^#\s*use_mappers = |use_mappers = |' /etc/pam_pkcs11/pam_pkcs11.conf
+              - name: V-260471-Grub-audit-startups
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"/GRUB_CMDLINE_LINUX_DEFAULT="audit=1"/' /etc/default/grub
+                      update-grub
+              - name: V-260473-disable-kernel-core-dumps
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      systemctl mask kdump-tools --now
+              - name: V-260500-library-files-must-be-owned-by-root
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      find /lib /lib64 /usr/lib /usr/lib64 -type f -name '*.so*' ! -group root -exec chown :root {} +
+              - name: V-260542-prevent-direct-login-to-root-account
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      passwd -l root
+              - name: V-260569-store-only-encrypted-passwords
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      sed -i 's/^\(password\s\+\)\[success=2 default=ignore\]\s\+pam_unix\.so.*$/\1[success=1 default=ignore] pam_unix.so obscure sha512 shadow rounds=100000/' /etc/pam.d/common-password
+              - name: V-260576-verify-PIV-credentials
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      sed -i 's/^[#[:space:]]*cert_policy\s*=.*/cert_policy = ca, ocsp_on, signature, crl_auto;/' /etc/pam_pkcs11/pam_pkcs11.conf
+              - name: V-260577-PKI-validate-trusted-anchors
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      sed -i 's/^[[:space:]]*#\?[[:space:]]*cert_policy[[:space:]]*=.*$/cert_policy = ca,signature,ocsp_on, crl_auto;/' /etc/pam_pkcs11/pam_pkcs11.conf
+                      grep -q cert_policy /etc/pam_pkcs11/pam_pkcs11.conf || \
+                      sed -i '$a\cert_policy = ca,signature,ocsp_on, crl_auto;' /etc/pam_pkcs11/pam_pkcs11.conf
+              - name: V-260519-Time-Sync-every-24-hours
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      sed -i '$a\server tick.usno.navy.mil iburst maxpoll 16\nserver tock.usno.navy.mil iburst maxpoll 16\nserver ntp2.usno.navy.mil iburst maxpoll 16' /etc/chrony/chrony.conf
+                      systemctl restart chrony
+              - name: V-260549-lock-user-account-after-three-attempts
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      sed -i '/auth\s*\[success=2 default=ignore\]\s*pam_unix.so/ {
+                        i\auth      required                     pam_faillock.so preauth audit silent deny=3 fail_interval=900
+                        i\auth      [default=die]                pam_faillock.so authfail
+                        s/.*/auth      required                     pam_unix.so try_first_pass/
+                      }' /etc/pam.d/common-auth
+              - name: V-260592-activate-log-server-to-offload
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      sed -i -E 's/active\s*=\s*no/active = yes/' /etc/audit/plugins.d/au-remote.conf
+              - name: ProEnableFIPS
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Enable FIPS mode via Pro license ==="
+                      export DEBIAN_FRONTEND=noninteractive
+
+                      pro enable fips-updates --assume-yes
+                      apt install ubuntu-pro-client -y
+
+              - name: RebootAfterFIPS
+                action: Reboot
+                inputs:
+                  delaySeconds: 0
+          - name: validate
+            steps:
+              - name: ValidateAppliedRemediations
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Validating Remediations ==="
+
+                      echo "Done."
+
+      KmsKeyId: !Ref pKMSKeyArn
