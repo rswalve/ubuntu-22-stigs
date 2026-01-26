@@ -1,0 +1,26 @@
+Here are a few notes on what remains:
+V-270694 - POAM - enforce the acknowledgement of the Standard Mandatory DOD Notice and Consent Banner for all SSH connections
+Prompt for input when connecting with SSH - Cannot make it match the required pattern because we built in interactive checks to allow AWS image builder to bypass the need for an ssh user to enter ‘Y’ to accept the consent banner
+ 
+V-270699 - POAM - library files must be group-owned by root or a system account
+Manual check does not show any output - STIG checker finds two files needed for "snakeoil" (default) certificates for HTTPS
+These could be deleted, since apps would use certificates issued by a CA
+Or we could change the group ownership from ssl-cert to root
+ 
+V-270725 - must store only encrypted representations of passwords
+/etc/pam.d/common-password needs to include sha512 and rounds=100000Imagebuilder sets this up but something changes it back between the pipeline and the AMI creation
+ 
+V-270754 - Firewall settings
+ 
+V-270756 - Must generate error messages with corrective actions
+Need to add the fix text to the pipeline script
+ 
+V-270831 - must use cryptographic mechanisms to protect the integrity of audit tools
+Pipeline currently adds the six lines twice to the /etc/aide/aide.conf file. This may be what causes the finding
+ 
+V-274868 - must require users to provide a password for privilege escalation
+Removing  "NOPASSWD"  from /etc/sudoers stops the ssm-user account from being able to login using the AWS session manager
+This finding could be addressed after console access is no longer needed or if there is a way to add a password to the AWS session manager
+ 
+V-274870 - audit any script or executable called by cron as root or by any privileged user
+Fix text needs to be added to the pipeline script
