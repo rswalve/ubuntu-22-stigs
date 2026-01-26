@@ -1,0 +1,140 @@
+!/bin/bash
+
+# ==============================================================================
+# Script: harden_ssh.sh
+# Purpose: Remediate V-270667, 668, 670, 671 for Ubuntu 24.04 FIPS/STIG
+# ==============================================================================
+
+# Ensure the script is run as root
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: Please run as root."
+  exit 1
+fi
+
+echo "--- Starting SSH Hardening Process ---"
+
+# 1. Clean up drop-in configuration directories
+# This ensures that no external files override our primary settings.
+echo "[1/4] Clearing Include directories..."
+rm -f /etc/ssh/ssh_config.d/*.conf
+rm -f /etc/ssh/sshd_config.d/*.conf
+
+# 2. Hardening SSH Daemon (Server)
+echo "[2/4] Hardening sshd_config (Server)..."
+[ -f /etc/ssh/sshd_config ] && cp /etc/ssh/sshd_config /tmp/sshd_config.bak
+
+# Delete existing Ciphers/MACs (handles comments, spaces, and active lines)
+sed -i '/^#\?[[:space:]]*Ciphers/d' /etc/ssh/sshd_config
+sed -i '/^#\?[[:space:]]*MACs/d' /etc/ssh/sshd_config
+
+# Append FIPS-compliant algorithms
+cat << EOF >> /etc/ssh/sshd_config
+# STIG/FIPS Hardening
+Ciphers aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes128-ctr
+MACs hmac-sha2-512,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-256-etm@openssh.com
+EOF
+
+# 3. Hardening SSH Client
+echo "[3/4] Hardening ssh_config (Client)..."
+[ -f /etc/ssh/ssh_config ] && cp /etc/ssh/ssh_config /tmp/ssh_config.bak
+
+# Delete existing Ciphers, MACs, and Host headers to prevent logic conflicts
+sed -i '/^#\?[[:space:]]*Ciphers/d' /etc/ssh/ssh_config
+sed -i '/^#\?[[:space:]]*MACs/d' /etc/ssh/ssh_config
+sed -i '/^Host \*/d' /etc/ssh/ssh_config
+
+# Append settings under the wildcard Host block
+cat << EOF >> /etc/ssh/ssh_config
+
+Host *
+    Ciphers aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes128-ctr
+    MACs hmac-sha2-512,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-256-etm@openssh.com
+EOF
+
+# 4. Verification and Restart
+echo "[4/4] Verifying configuration..."
+if sshd -t 2>&1; then
+    echo "Success: Configuration is valid. Restarting SSH..."
+    systemctl restart ssh
+    echo "--- SSH Hardening Complete ---"
+else
+    echo "!!! FATAL ERROR: SSH configuration is invalid !!!" >&2
+    # Output the exact error to stdout for Image Builder logs
+    sshd -t 2>&1
+    exit 1
+fi
+
+echo "=== Updating Grub password for V-260470 ==="
+PASSWORD="super-secret-ninja-password"
+GRUB_HASH=$(echo -e "$PASSWORD\n$PASSWORD" | grub-mkpasswd-pbkdf2 | grep -oP '(?<=PBKDF2 hash of your password is ).*' )
+
+cp /etc/grub.d/40_custom /etc/grub.d/40_custom.bak
+sed -i "\$a set superusers=\"root\"\npassword_pbkdf2 root $GRUB_HASH" /etc/grub.d/40_custom
+
+cp /etc/grub.d/10_linux /etc/grub.d/10_linux.bak
+sed -i 's/^CLASS="--class gnu-linux/CLASS="--unrestricted --class gnu-linux/' /etc/grub.d/10_linux
+update-grub
+chmod 600 /boot/grub/grub.cfg
+
+echo "=== /etc/issue.net V-270691 ==="
+tee /etc/issue.net > /dev/null << EOF
+You are accessing a U.S. Government (USG) Information System (IS) that is
+provided for USG-authorized use only. By using this IS (which includes any
+device attached to this IS), you consent to the following conditions:
+-The USG routinely intercepts and monitors communications on this IS for
+purposes including, but not limited to, penetration testing, COMSEC monitoring,
+network operations and defense, personnel misconduct (PM), law enforcement
+(LE), and counterintelligence (CI) investigations.
+-At any time, the USG may inspect and seize data stored on this IS.
+-Communications using, or data stored on, this IS are not private, are subject
+to routine monitoring, interception, and search, and may be disclosed or used
+for any USG-authorized purpose.
+-This IS includes security measures (e.g., authentication and access controls)
+to protect USG interests--not for your personal benefit or privacy.
+-Notwithstanding the above, using this IS does not constitute consent to PM, LE
+or CI investigative searching or monitoring of the content of privileged
+communications, or work product, related to personal representation or services
+by attorneys, psychotherapists, or clergy, and their assistants. Such
+communications and work product are private and confidential. See User
+Agreement for details.
+EOF
+sed -i '/^Banner/d' /etc/ssh/sshd_config
+sed -i '$aBanner /etc/issue.net' /etc/ssh/sshd_config
+
+echo "=== V-270652-SilentReports_in_Aide ==="
+sed 's/^#SILENTREPORTS=no/SILENTREPORTS=no/' /etc/default/aide
+sed -i 's/^#\(SILENTREPORTS=no\)/\1/' /etc/default/aide
+sed 's/^#SILENTREPORTS=no/SILENTREPORTS=no/' /etc/default/aide
+
+v-270725
+sed -i 's/^password.*pam_unix.so.*/password [success=2 default=ignore] pam_unix.so obscure sha512 shadow rounds=100000/' /etc/pam.d/common-password
+
+
+
+echo "=== [4/6] SSH Hardening (Server & Client) ==="
+                      # Server Hardening (V-270667, V-270668)
+                      SSHD_CONF="/etc/ssh/sshd_config"
+                      sed -i '/^#\?[[:space:]]*Ciphers/d' "$SSHD_CONF"
+                      sed -i '/^#\?[[:space:]]*MACs/d' "$SSHD_CONF"
+                      cat << EOF >> "$SSHD_CONF"
+                      Ciphers aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes128-ctr
+                      MACs hmac-sha2-512,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-256-etm@openssh.com
+                      EOF
+
+                      # Client Hardening (V-270670, V-270671)
+                      SSH_CONF="/etc/ssh/ssh_config"
+                      sed -i '/^#\?[[:space:]]*Ciphers/d' "$SSH_CONF"
+                      sed -i '/^#\?[[:space:]]*MACs/d' "$SSH_CONF"
+                      if ! grep -q "^Host \*" "$SSH_CONF"; then echo "Host *" >> "$SSH_CONF"; fi
+                      sed -i '/Host \*/a \    Ciphers aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes128-ctr\n    MACs hmac-sha2-512,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-256-etm@openssh.com' "$SSH_CONF"
+
+                      # Validate SSH before finishing
+                      sshd -t && systemctl restart ssh
+
+
+- name: v-270725-pam.d-common-password
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      sed -i 's/^password.*pam_unix.so.*/password [success=2 default=ignore] pam_unix.so obscure sha512 shadow rounds=100000/' /etc/pam.d/common-password

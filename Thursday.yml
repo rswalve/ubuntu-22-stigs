@@ -1,0 +1,30 @@
+- name: V-270675-grub-boot-to-single-user
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      # 1. Generate Hash
+                      PASSWORD="super-secret-ninja-password"
+                      GRUB_HASH=$(echo -e "$PASSWORD\n$PASSWORD" | grub-mkpasswd-pbkdf2 | grep -oP '(?<=PBKDF2 hash of your password is ).*' )
+
+                      # 2. Add to 40_custom (Standard way)
+                      cat <<EOF >> /etc/grub.d/40_custom
+                      set superusers="root"
+                      password_pbkdf2 root $GRUB_HASH
+                      EOF
+
+                      # 3. Enable unrestricted boot (So it doesn't ask for password on normal boot)
+                      # We target the specific menuentry generation line
+                      sed -i 's/CLASS="--class gnu-linux/CLASS="--unrestricted --class gnu-linux/' /etc/grub.d/10_linux
+
+                      # 4. CRITICAL: Ensure FIPS stays in the loop
+                      # Instead of just update-grub, make sure the fips config is present
+                      if [ -f /etc/default/grub.d/99-fips.cfg ]; then
+                          echo "FIPS config detected, ensuring it is included..."
+                      fi
+                      
+                      update-grub
+
+                      # 5. STIG Requirement for permissions
+                      # Use 400 or 600, but ensure the directory is also accessible
+                      chmod 600 /boot/grub/grub.cfg

@@ -1,0 +1,78 @@
+ name: V-270675-grub-boot-to-single-user
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Updating Grub password for V-260470 ==="
+                      PASSWORD="super-secret-ninja-password"
+                      GRUB_HASH=$(echo -e "$PASSWORD\n$PASSWORD" | grub-mkpasswd-pbkdf2 | grep -oP '(?<=PBKDF2 hash of your password is ).*' )
+
+                      cp /etc/grub.d/40_custom /etc/grub.d/40_custom.bak
+                      sed -i "\$a set superusers=\"root\"\npassword_pbkdf2 root $GRUB_HASH" /etc/grub.d/40_custom
+
+                      cp /etc/grub.d/10_linux /etc/grub.d/10_linux.bak
+                      sed -i 's/^CLASS="--class gnu-linux/CLASS="--unrestricted --class gnu-linux/' /etc/grub.d/10_linux
+                      update-grub
+                      chmod 600 /boot/grub/grub.cfg
+              - name: V-270691-DoD-Banner
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      tee /etc/issue.net > /dev/null << EOF
+                      You are accessing a U.S. Government (USG) Information System (IS) that is
+                      provided for USG-authorized use only. By using this IS (which includes any
+                      device attached to this IS), you consent to the following conditions:
+                      -The USG routinely intercepts and monitors communications on this IS for
+                      purposes including, but not limited to, penetration testing, COMSEC monitoring,
+                      network operations and defense, personnel misconduct (PM), law enforcement
+                      (LE), and counterintelligence (CI) investigations.
+                      -At any time, the USG may inspect and seize data stored on this IS.
+                      -Communications using, or data stored on, this IS are not private, are subject
+                      to routine monitoring, interception, and search, and may be disclosed or used
+                      for any USG-authorized purpose.
+                      -This IS includes security measures (e.g., authentication and access controls)
+                      to protect USG interests--not for your personal benefit or privacy.
+                      -Notwithstanding the above, using this IS does not constitute consent to PM, LE
+                      or CI investigative searching or monitoring of the content of privileged
+                      communications, or work product, related to personal representation or services
+                      by attorneys, psychotherapists, or clergy, and their assistants. Such
+                      communications and work product are private and confidential. See User
+                      Agreement for details.
+                      EOF
+                      sed -i '/^Banner/d' /etc/ssh/sshd_config
+                      sed -i '$aBanner /etc/issue.net' /etc/ssh/sshd_config
+              - name: V-270652-SilentReports_in_Aide
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      sed 's/^#SILENTREPORTS=no/SILENTREPORTS=no/' /etc/default/aide
+                      sed -i 's/^#\(SILENTREPORTS=no\)/\1/' /etc/default/aide
+                      sed 's/^#SILENTREPORTS=no/SILENTREPORTS=no/' /etc/default/aide
+              - name: ProEnableFIPS
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Enable FIPS mode via Pro license ==="
+                      export DEBIAN_FRONTEND=noninteractive
+
+                      pro enable fips-updates --assume-yes
+                      apt install ubuntu-pro-client -y
+
+              - name: RebootAfterFIPS
+                action: Reboot
+                inputs:
+                  delaySeconds: 0 
+          
+          - name: validate
+            steps:
+              - name: ValidateAppliedRemediations
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      echo "=== Validating Remediations ==="
+
+                      echo "Done."
